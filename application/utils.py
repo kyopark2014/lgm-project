@@ -35,7 +35,7 @@ def load_config():
         session = boto3.Session()
         region = session.region_name
         config['region'] = region
-        config['projectName'] = "lgm"
+        config['projectName'] = "es-us"
         
         sts = boto3.client("sts")
         response = sts.get_caller_identity()
