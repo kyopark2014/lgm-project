@@ -89,11 +89,10 @@ aws_secret_key = config.get('aws', {}).get('secret_access_key')
 aws_session_token = config.get('aws', {}).get('session_token')
 
 reasoning_mode = 'Disable'
-grading_mode = 'Disable'
 user_id = "mcp"
 
 def update(modelName, debugMode, reasoningMode):    
-    global model_name, model_id, model_type, debug_mode, reasoning_mode, grading_mode
+    global model_name, model_id, model_type, debug_mode, reasoning_mode
     global models, user_id
 
     if model_name != modelName:

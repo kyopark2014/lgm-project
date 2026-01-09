@@ -166,7 +166,7 @@ with st.sidebar:
         st.subheader("🌇 이미지 업로드")
         uploaded_file = st.file_uploader("이미지 분석을 위한 파일을 선택합니다.", type=["png", "jpg", "jpeg"])
 
-    chat.update(modelName, debugMode, reasoningMode, gradingMode)    
+    chat.update(modelName, debugMode, reasoningMode)    
 
     st.success(f"Connected to {modelName}", icon="💚")
     clear_button = st.button("대화 초기화", key="clear")
