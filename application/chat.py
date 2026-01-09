@@ -9,6 +9,7 @@ import info
 import utils
 import langgraph_agent
 import mcp_config
+from urllib import parse
 
 from io import BytesIO
 from PIL import Image
@@ -18,8 +19,24 @@ from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, AIMessageChunk
 from langchain_mcp_adapters.client import MultiServerMCPClient
+
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.store.memory import InMemoryStore
+
+import logging
+import sys
+
+logging.basicConfig(
+    level=logging.INFO,  # Default to INFO level
+    format='%(filename)s:%(lineno)d | %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stderr)
+    ]
+)
+logger = logging.getLogger("chat")
+
+workingDir = os.path.dirname(os.path.abspath(__file__))
+config_path = os.path.join(workingDir, "config.json")
 
 # Simple memory class to replace ConversationBufferWindowMemory
 class SimpleMemory:
@@ -43,44 +60,29 @@ class SimpleChatMemory:
     def clear(self):
         self.messages = []
 
-import logging
-import sys
-
-logging.basicConfig(
-    level=logging.INFO,  # Default to INFO level
-    format='%(filename)s:%(lineno)d | %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stderr)
-    ]
-)
-
-script_dir = os.path.dirname(os.path.abspath(__file__))
-config_path = os.path.join(script_dir, "config.json")
-
-logger = logging.getLogger("chat")
-
 reasoning_mode = 'Disable'
 debug_messages = []  # List to store debug messages
 
 config = utils.load_config()
 print(f"config: {config}")
 
-projectName = config.get("projectName", "mop")
-region = config.get("region", "us-west-2")
+projectName = config.get("projectName", "es")
+bedrock_region = config.get("region", "ap-northeast-2")
+
 accountId = config.get("accountId")
-    
-knowledge_base_id = config.get('knowledge_base_id')
-number_of_results = 4
+knowledge_base_name = config.get("knowledge_base_name")
+
+path = config.get('sharing_url', '')
+doc_prefix = "docs/"
 
 MSG_LENGTH = 100    
 
-model_name = "Claude 3.7 Sonnet"
+model_name = "Claude 4.5 Haiku"
 model_type = "claude"
 models = info.get_model_info(model_name)
 number_of_models = len(models)
 model_id = models[0]["model_id"]
 debug_mode = "Enable"
-multi_region = "Disable"
 
 aws_access_key = config.get('aws', {}).get('access_key_id')
 aws_secret_key = config.get('aws', {}).get('secret_access_key')
@@ -90,13 +92,10 @@ reasoning_mode = 'Disable'
 grading_mode = 'Disable'
 user_id = "mcp"
 
-def update(modelName, debugMode, reasoningMode, gradingMode):    
+def update(modelName, debugMode, reasoningMode):    
     global model_name, model_id, model_type, debug_mode, reasoning_mode, grading_mode
     global models, user_id
 
-    # load mcp.env    
-    mcp_env = utils.load_mcp_env()
-    
     if model_name != modelName:
         model_name = modelName
         logger.info(f"model_name: {model_name}")
@@ -113,32 +112,15 @@ def update(modelName, debugMode, reasoningMode, gradingMode):
         reasoning_mode = reasoningMode
         logger.info(f"reasoning_mode: {reasoning_mode}")    
 
-    if grading_mode != gradingMode:
-        grading_mode = gradingMode
-        logger.info(f"grading_mode: {grading_mode}")            
-        mcp_env['grading_mode'] = grading_mode
-
-    # update mcp.env    
-    utils.save_mcp_env(mcp_env)
     # logger.info(f"mcp.env updated: {mcp_env}")
-
-def update_mcp_env():
-    mcp_env = utils.load_mcp_env()
-    
-    mcp_env['grading_mode'] = grading_mode
-    user_id = "mcp"
-    mcp_env['user_id'] = user_id
-
-    utils.save_mcp_env(mcp_env)
-    logger.info(f"mcp.env updated: {mcp_env}")
 
 map_chain = dict() 
 checkpointers = dict() 
 memorystores = dict() 
 
+memory_chain = None
 checkpointer = MemorySaver()
 memorystore = InMemoryStore()
-memory_chain = None  # Initialize memory_chain as global variable
 
 def initiate():
     global memory_chain, checkpointer, memorystore, checkpointers, memorystores
@@ -364,6 +346,69 @@ def traslation(chat, text, input_language, output_language):
         raise Exception ("Not able to request to LLM")
 
     return msg[msg.find('<result>')+8:len(msg)-9] # remove <result> tag
+
+def get_parallel_processing_chat(models, selected):
+    global model_type
+    profile = models[selected]
+    bedrock_region =  profile['bedrock_region']
+    modelId = profile['model_id']
+    model_type = profile['model_type']
+    maxOutputTokens = 4096
+    logger.info(f'selected_chat: {selected}, bedrock_region: {bedrock_region}, modelId: {modelId}, model_type: {model_type}')
+
+    if profile['model_type'] == 'nova':
+        STOP_SEQUENCE = '"\n\n<thinking>", "\n<thinking>", " <thinking>"'
+    elif profile['model_type'] == 'claude':
+        STOP_SEQUENCE = "\n\nHuman:" 
+    elif profile['model_type'] == 'openai':
+        STOP_SEQUENCE = "" 
+                          
+    # bedrock   
+    if aws_access_key and aws_secret_key:
+        boto3_bedrock = boto3.client(
+            service_name='bedrock-runtime',
+            region_name=bedrock_region,
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key,
+            aws_session_token=aws_session_token,
+            config=Config(
+                retries = {
+                    'max_attempts': 30
+                }
+            )
+        )
+    else:
+        boto3_bedrock = boto3.client(
+            service_name='bedrock-runtime',
+            region_name=bedrock_region,
+            config=Config(
+                retries = {
+                    'max_attempts': 30
+                }
+            )
+        )
+
+    if profile['model_type'] != 'openai':
+        parameters = {
+            "max_tokens":maxOutputTokens,     
+            "temperature":0.1,
+            "top_k":250,
+            "stop_sequences": [STOP_SEQUENCE]
+        }
+    else:
+        parameters = {
+            "max_tokens":maxOutputTokens,     
+            "temperature":0.1,
+            "top_k":250
+        }
+
+    chat = ChatBedrock(   # new chat model
+        model_id=modelId,
+        client=boto3_bedrock, 
+        model_kwargs=parameters,
+    )        
+    
+    return chat
 
 def show_extended_thinking(st, result):
     # logger.info(f"result: {result}")
@@ -695,7 +740,7 @@ def get_rag_prompt(text):
 if aws_access_key and aws_secret_key:
     bedrock_agent_runtime_client = boto3.client(
         "bedrock-agent-runtime",
-        region_name=region,
+        region_name=bedrock_region,
         aws_access_key_id=aws_access_key,
         aws_secret_access_key=aws_secret_key,
         aws_session_token=aws_session_token,
@@ -703,11 +748,12 @@ if aws_access_key and aws_secret_key:
 else:
     bedrock_agent_runtime_client = boto3.client(
         "bedrock-agent-runtime",
-        region_name=region
+        region_name=bedrock_region
     )
+knowledge_base_id = config.get('knowledge_base_id')
+number_of_results = 4
 
 def retrieve(query):
-    logger.info(f"region: {region}, knowledge_base_id: {knowledge_base_id}")
     response = bedrock_agent_runtime_client.retrieve(
         retrievalQuery={"text": query},
         knowledgeBaseId=knowledge_base_id,
@@ -734,9 +780,8 @@ def retrieve(query):
                 uri = location["s3Location"]["uri"] if location["s3Location"]["uri"] is not None else ""
                 
                 name = uri.split("/")[-1]
-                # encoded_name = parse.quote(name)                
-                # url = f"{path}/{doc_prefix}{encoded_name}"
-                url = uri # TODO: add path and doc_prefix
+                encoded_name = parse.quote(name)                
+                url = f"{path}/{doc_prefix}{encoded_name}"
                 
             elif "webLocation" in location:
                 url = location["webLocation"]["url"] if location["webLocation"]["url"] is not None else ""
@@ -796,13 +841,13 @@ def run_rag_with_knowledge_base(query, st):
         logger.info(f"error message: {err_msg}")                    
         raise Exception ("Not able to request to LLM")
     
-    # if relevant_docs:
-    #     ref = "\n\n### Reference\n"
-    #     for i, doc in enumerate(relevant_docs):
-    #         page_content = doc["contents"][:100].replace("\n", "")
-    #         ref += f"{i+1}. [{doc["reference"]['title']}]({doc["reference"]['url']}), {page_content}...\n"    
-    #     logger.info(f"ref: {ref}")
-    #     msg += ref
+    if relevant_docs:
+        ref = "\n\n### Reference\n"
+        for i, doc in enumerate(relevant_docs):
+            page_content = doc["contents"][:100].replace("\n", "")
+            ref += f"{i+1}. [{doc["reference"]['title']}]({doc["reference"]['url']}), {page_content}...\n"    
+        logger.info(f"ref: {ref}")
+        msg += ref
     
     return msg, reference_docs
    
@@ -901,15 +946,7 @@ def get_tool_info(tool_name, tool_content):
     # aws document
     elif tool_name == "search_documentation":
         try:
-            # Check if tool_content is already a list
-            if isinstance(tool_content, list):
-                json_data = tool_content
-            elif isinstance(tool_content, str):
-                json_data = json.loads(tool_content)
-            else:
-                # Try to convert to list if it's another type
-                json_data = list(tool_content) if hasattr(tool_content, '__iter__') else [tool_content]
-            
+            json_data = json.loads(tool_content)
             for item in json_data:
                 logger.info(f"item: {item}")
                 
@@ -932,8 +969,8 @@ def get_tool_info(tool_name, tool_content):
                 else:
                     logger.info(f"Invalid item format: {item}")
                     
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.info(f"JSON parsing error: {e}, tool_content type: {type(tool_content)}, tool_content: {tool_content}")
+        except json.JSONDecodeError:
+            logger.info(f"JSON parsing error: {tool_content}")
             pass
 
         logger.info(f"content: {content}")
@@ -1027,7 +1064,22 @@ def get_tool_info(tool_name, tool_content):
                     for url in path:
                         urls.append(url)
                 else:
-                    urls.append(path)            
+                    urls.append(path)
+            elif isinstance(json_data, list):  # Parse JSON from text field when json_data is a list
+                for item in json_data:
+                    if isinstance(item, dict) and "text" in item:
+                        try:
+                            text_json = json.loads(item["text"])
+                            if isinstance(text_json, dict) and "path" in text_json:
+                                path = text_json["path"]
+                                if isinstance(path, list):
+                                    for url in path:
+                                        urls.append(url)
+                                else:
+                                    urls.append(path)
+                        except (json.JSONDecodeError, TypeError):
+                            pass            
+
 
             if isinstance(json_data, dict):
                 for item in json_data:
@@ -1041,11 +1093,40 @@ def get_tool_info(tool_name, tool_content):
                             "title": title,
                             "content": content_text
                         })
-            else:
-                logger.info(f"json_data is not a dict: {json_data}")
-
+            elif isinstance(json_data, list):
+                logger.info(f"json_data is a list: {json_data}")
                 for item in json_data:
-                    if "reference" in item and "contents" in item:
+                    if isinstance(item, dict) and "text" in item:
+                        try:
+                            # text 필드 안의 JSON 문자열 파싱
+                            text_json = json.loads(item["text"])
+                            if isinstance(text_json, list):
+                                # 파싱된 JSON이 리스트인 경우
+                                for ref_item in text_json:
+                                    if isinstance(ref_item, dict) and "reference" in ref_item and "contents" in ref_item:
+                                        url = ref_item["reference"]["url"]
+                                        title = ref_item["reference"]["title"]
+                                        content_text = ref_item["contents"][:100] + "..." if len(ref_item["contents"]) > 100 else ref_item["contents"]
+                                        tool_references.append({
+                                            "url": url,
+                                            "title": title,
+                                            "content": content_text
+                                        })
+                            elif isinstance(text_json, dict) and "reference" in text_json and "contents" in text_json:
+                                # 파싱된 JSON이 딕셔너리인 경우
+                                url = text_json["reference"]["url"]
+                                title = text_json["reference"]["title"]
+                                content_text = text_json["contents"][:100] + "..." if len(text_json["contents"]) > 100 else text_json["contents"]
+                                tool_references.append({
+                                    "url": url,
+                                    "title": title,
+                                    "content": content_text
+                                })
+                        except (json.JSONDecodeError, TypeError) as e:
+                            logger.warning(f"Failed to parse text JSON: {e}")
+                            pass
+                    elif isinstance(item, dict) and "reference" in item and "contents" in item:
+                        # 리스트 항목이 직접 reference를 가지고 있는 경우
                         url = item["reference"]["url"]
                         title = item["reference"]["title"]
                         content_text = item["contents"][:100] + "..." if len(item["contents"]) > 100 else item["contents"]
@@ -1235,12 +1316,12 @@ async def run_langgraph_agent(query, mcp_servers, history_mode, containers):
         result = "답변을 찾지 못하였습니다."        
     logger.info(f"result: {result}")
 
-    # if references:
-    #     ref = "\n\n### Reference\n"
-    #     for i, reference in enumerate(references):
-    #         page_content = reference['content'][:100].replace("\n", "")
-    #         ref += f"{i+1}. [{reference['title']}]({reference['url']}), {page_content}...\n"    
-    #     result += ref
+    if references:
+        ref = "\n\n### Reference\n"
+        for i, reference in enumerate(references):
+            page_content = reference['content'][:100].replace("\n", "")
+            ref += f"{i+1}. [{reference['title']}]({reference['url']}), {page_content}...\n"    
+        result += ref
     
     if containers is not None:
         containers['notification'][index].markdown(result)

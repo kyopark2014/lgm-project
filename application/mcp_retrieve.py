@@ -26,9 +26,12 @@ def load_config():
 config = load_config()
 
 bedrock_region = config.get('region', 'us-west-2')
-projectName = config.get('projectName', 'mop')
+projectName = config.get('projectName', 'es')
 knowledge_base_id = config.get('knowledge_base_id', '')
 number_of_results = 5
+
+doc_prefix = "docs/"
+path = config.get('sharing_url', '')
 
 aws_access_key = config.get('aws', {}).get('access_key_id')
 aws_secret_key = config.get('aws', {}).get('secret_access_key')
@@ -73,9 +76,8 @@ def retrieve(query):
                 uri = location["s3Location"]["uri"] if location["s3Location"]["uri"] is not None else ""
                 
                 name = uri.split("/")[-1]
-                # encoded_name = parse.quote(name)                
-                # url = f"{path}/{doc_prefix}{encoded_name}"
-                url = uri # TODO: add path and doc_prefix
+                encoded_name = parse.quote(name)                
+                url = f"{path}/{doc_prefix}{encoded_name}"
                 
             elif "webLocation" in location:
                 url = location["webLocation"]["url"] if location["webLocation"]["url"] is not None else ""
