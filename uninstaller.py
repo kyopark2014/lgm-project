@@ -698,13 +698,7 @@ def delete_secrets():
     
     secret_names = [
         f"openweathermap-{project_name}",
-        f"langsmithapikey-{project_name}",
-        f"tavilyapikey-{project_name}",
-        f"perplexityapikey-{project_name}",
-        f"firecrawlapikey-{project_name}",
-        f"code-interpreter-{project_name}",
-        f"novaactapikey-{project_name}",
-        f"notionapikey-{project_name}"
+        f"tavilyapikey-{project_name}"
     ]
     
     for secret_name in secret_names:
