@@ -894,13 +894,13 @@ def main():
         delete_cloudfront_distributions()
         delete_alb_resources()
         delete_ec2_instances()
+        delete_secret_groups()         
         delete_vpc_resources()
         delete_opensearch_collection()
         delete_knowledge_bases()
         delete_secrets()
         delete_iam_roles()
         delete_s3_buckets()
-        delete_secret_groups()         
         delete_disabled_cloudfront_distributions()
         
         elapsed_time = time.time() - start_time

@@ -3055,10 +3055,10 @@ def create_cloudfront_distribution(alb_info: Dict[str, str], s3_bucket_name: str
         s3_origin_exists = False
         existing_origins = []
         for origin in dist_config["Origins"]["Items"]:
-            # Ensure OriginCustomHeaders exists for all origins (required by CloudFront API)
+            # Ensure CustomHeaders exists for all origins (required by CloudFront API)
             origin_copy = origin.copy()
-            if "OriginCustomHeaders" not in origin_copy:
-                origin_copy["OriginCustomHeaders"] = {
+            if "CustomHeaders" not in origin_copy:
+                origin_copy["CustomHeaders"] = {
                     "Quantity": 0,
                     "Items": []
                 }
@@ -3071,14 +3071,14 @@ def create_cloudfront_distribution(alb_info: Dict[str, str], s3_bucket_name: str
         # Add S3 origin if it doesn't exist
         if not s3_origin_exists:
             # Create new S3 origin with all required fields
-            # Note: OriginCustomHeaders is required by CloudFront API even if empty
+            # Note: CustomHeaders is required by CloudFront API even if empty
             new_s3_origin = {
                 "Id": f"s3-{project_name}",
                 "DomainName": f"{s3_bucket_name}.s3.{region}.amazonaws.com",
                 "S3OriginConfig": {
                     "OriginAccessIdentity": f"origin-access-identity/cloudfront/{oai_id}"
                 },
-                "OriginCustomHeaders": {
+                "CustomHeaders": {
                     "Quantity": 0,
                     "Items": []
                 }
