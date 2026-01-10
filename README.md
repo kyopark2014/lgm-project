@@ -227,19 +227,11 @@ async for output in app.astream(inputs, config, stream_mode="messages"):
 
 ## 배포하기
 
-### 배포 준비하기
+### EC2로 배포하기
 
 AWS console의 EC2로 접속하여 [Launch an instance]를 선택합니다. 별다른 설정없이 [Launch instance]를 선택합니다. 기존에 사용하던 key pair가 없다면 "Proceed without key pair"을 선택해도 문제 없습니다. 수분 후에 instance가 준비되면 [Connet] - [EC2 Instance Connect]를 선택하여 접속합니다. 
 
 <img width="806" height="639" alt="image" src="https://github.com/user-attachments/assets/e8a72859-4ac7-46af-b7ae-8546ea19e7a6" />
-
-아래 형태로 Credential을 입력합니다. 
-
-```text
-export AWS_ACCESS_KEY_ID= AKAADEMOCTZ7VQUQKLTW
-export AWS_SECRET_ACCESS_KEY=PCDemO13Hu99CwGmAkoJb+DemoXrmciLKVNOY5A/
-export AWS_DEFAULT_REGION=us-west-2
-```
 
 이후 아래와 같이 python, pip, git, boto3를 설치합니다.
 
@@ -248,13 +240,23 @@ sudo yum install python3 python3-pip git -y
 pip install boto3
 ```
 
-
-### EC2에서 실행하기
-
-아래와 같이 필요한 인프라를 python을 이용해 설치합니다. 이때 생성된 인프라의 정보를 application/config.json 파일도 생성하거나 업데이트합니다. Secret에 보관되는 API에 대한 Credential을 입력하여야 합니다. 없다면 엔터키를 눌러서 넘어갑니다.
+아래 형태로 Credential을 입력합니다. Workshop의 경우에는 AWS_SESSION_TOKEN도 함께 제공됩니다.
 
 ```text
-python installer.py
+export AWS_ACCESS_KEY_ID="DEMO47CR3PDEMOEEBYE7"
+export AWS_SECRET_ACCESS_KEY="DEMOGeFzTh2na/DEMOxhcRj90VyljxrqmUAh+UJ"
+```
+
+아래와 같이 git source를 가져옵니다.
+
+```python
+git clone https://github.com/kyopark2014/es-us-project
+```
+
+아래와 같이 installer.py를 이용해 설치를 시작합니다.
+
+```python
+cd es-us-project && python installer.py
 ```
 
 API 구현에 필요한 credential은 secret으로 관리합니다. 따라서 설치시 필요한 credential 입력이 필요한데 아래와 같은 방식을 활용하여 미리 credential을 준비합니다. 
