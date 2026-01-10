@@ -236,7 +236,7 @@ AWS console의 EC2로 접속하여 [Launch an instance]를 선택합니다. 별�
 이후 아래와 같이 python, pip, git, boto3를 설치합니다.
 
 ```text
-sudo yum install python3 python3-pip git -y
+sudo yum install python3 python3-pip git docker -y
 pip install boto3
 ```
 
