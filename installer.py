@@ -3046,29 +3046,44 @@ def create_cloudfront_distribution(alb_info: Dict[str, str], s3_bucket_name: str
     # Update CloudFront distribution to add S3 origin
     logger.info("  Updating CloudFront distribution to add S3 origin...")
     try:
-        # Get current distribution config
+        # Get current distribution config (preserve all existing fields)
         dist_response = cloudfront_client.get_distribution(Id=distribution_id)
         dist_config = dist_response["Distribution"]["DistributionConfig"]
         etag = dist_response["ETag"]
         
-        # Check if S3 origin already exists
+        # Check if S3 origin already exists and ensure all origins have required fields
         s3_origin_exists = False
-        existing_origins = dist_config["Origins"]["Items"].copy()
-        for origin in existing_origins:
+        existing_origins = []
+        for origin in dist_config["Origins"]["Items"]:
+            # Ensure OriginCustomHeaders exists for all origins (required by CloudFront API)
+            origin_copy = origin.copy()
+            if "OriginCustomHeaders" not in origin_copy:
+                origin_copy["OriginCustomHeaders"] = {
+                    "Quantity": 0,
+                    "Items": []
+                }
+            existing_origins.append(origin_copy)
+            
             if origin["Id"] == f"s3-{project_name}":
                 s3_origin_exists = True
                 logger.info(f"  S3 origin already exists in distribution")
-                break
         
         # Add S3 origin if it doesn't exist
         if not s3_origin_exists:
-            existing_origins.append({
+            # Create new S3 origin with all required fields
+            # Note: OriginCustomHeaders is required by CloudFront API even if empty
+            new_s3_origin = {
                 "Id": f"s3-{project_name}",
                 "DomainName": f"{s3_bucket_name}.s3.{region}.amazonaws.com",
                 "S3OriginConfig": {
                     "OriginAccessIdentity": f"origin-access-identity/cloudfront/{oai_id}"
+                },
+                "OriginCustomHeaders": {
+                    "Quantity": 0,
+                    "Items": []
                 }
-            })
+            }
+            existing_origins.append(new_s3_origin)
             dist_config["Origins"]["Quantity"] = len(existing_origins)
             dist_config["Origins"]["Items"] = existing_origins
         
