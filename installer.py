@@ -2923,70 +2923,7 @@ def create_cloudfront_distribution(alb_info: Dict[str, str], s3_bucket_name: str
     except Exception as e:
         logger.debug(f"Error checking existing distributions: {e}")
     
-    # Create CloudFront distribution with ALB origin only (S3 origin will be added later)
-    distribution_config = {
-        "CallerReference": f"{project_name}-{int(time.time())}",
-        "Comment": f"CloudFront-for-{project_name}-Hybrid",
-        "DefaultCacheBehavior": {
-            "TargetOriginId": f"alb-{project_name}",
-            "ViewerProtocolPolicy": "redirect-to-https",
-            "AllowedMethods": {
-                "Quantity": 7,
-                "Items": ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"],
-                "CachedMethods": {
-                    "Quantity": 2,
-                    "Items": ["GET", "HEAD"]
-                }
-            },
-            "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
-            "OriginRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",
-            "Compress": True
-        },
-        "Origins": {
-            "Quantity": 1,
-            "Items": [
-                {
-                    "Id": f"alb-{project_name}",
-                    "DomainName": alb_info["dns"],
-                    "CustomOriginConfig": {
-                        "HTTPPort": 80,
-                        "HTTPSPort": 443,
-                        "OriginProtocolPolicy": "http-only"
-                    },
-                    "CustomHeaders": {
-                        "Quantity": 0,
-                        "Items": []
-                    },
-                    "OriginPath": ""
-                }                
-            ]
-        },
-        "Enabled": True,
-        "PriceClass": "PriceClass_200"
-    }
-    
-    # Log distribution config to verify it doesn't reference non-existent origins
-    logger.info(f"Creating CloudFront distribution with config:")
-    logger.info(f"  Origins: {[origin['Id'] for origin in distribution_config['Origins']['Items']]}")
-    logger.info(f"  DefaultCacheBehavior TargetOriginId: {distribution_config['DefaultCacheBehavior']['TargetOriginId']}")
-    logger.info(f"  CacheBehaviors: Not included (will be added after S3 origin is created)")
-
-    try:
-        response = cloudfront_client.create_distribution(DistributionConfig=distribution_config)
-        distribution_id = response["Distribution"]["Id"]
-        distribution_domain = response["Distribution"]["DomainName"]
-        
-        logger.info(f"✓ CloudFront distribution created (ALB + S3): {distribution_domain}")
-        logger.info(f"  Distribution ID: {distribution_id}")
-        logger.info(f"  Default origin: ALB {alb_info['dns']}")
-        logger.info(f"  /images/* origin: S3 bucket {s3_bucket_name}")
-        logger.warning("  Note: CloudFront distribution may take 15-20 minutes to deploy")
-        
-    except ClientError as e:
-        logger.error(f"Error creating CloudFront distribution: {e}")
-        raise
-
-    # Check for existing Origin Access Identity or create new one
+    # Check for existing Origin Access Identity or create new one (needed before creating distribution)
     logger.info("  Checking for existing Origin Access Identity for S3...")
     oai_id = None
     oai_canonical_user_id = None
@@ -3048,114 +2985,116 @@ def create_cloudfront_distribution(alb_info: Dict[str, str], s3_bucket_name: str
         logger.error(f"Bucket Policy: {json.dumps(bucket_policy, indent=2)}")
         raise
 
-    # Update CloudFront distribution to add S3 origin
-    logger.info("  Updating CloudFront distribution to add S3 origin...")
-    try:
-        # Get current distribution config (preserve all existing fields)
-        dist_response = cloudfront_client.get_distribution(Id=distribution_id)
-        dist_config = dist_response["Distribution"]["DistributionConfig"]
-        etag = dist_response["ETag"]
-        
-        # Check if S3 origin already exists and ensure all origins have required fields
-        s3_origin_exists = False
-        existing_origins = []
-        for origin in dist_config["Origins"]["Items"]:
-            # Ensure CustomHeaders exists for all origins (required by CloudFront API)
-            origin_copy = origin.copy()
-            if "CustomHeaders" not in origin_copy:
-                origin_copy["CustomHeaders"] = {
-                    "Quantity": 0,
-                    "Items": []
+    # Create CloudFront distribution with both ALB and S3 origins (matching provided config format)
+    logger.info("  Creating CloudFront distribution with ALB and S3 origins...")
+    distribution_config = {
+        "CallerReference": f"{project_name}-{int(time.time())}",
+        "Comment": f"CloudFront-for-{project_name}-Hybrid",
+        "DefaultCacheBehavior": {
+            "TargetOriginId": f"alb-{project_name}",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "AllowedMethods": {
+                "Quantity": 7,
+                "Items": ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"],
+                "CachedMethods": {
+                    "Quantity": 2,
+                    "Items": ["GET", "HEAD"]
                 }
-            # Ensure originPath exists for all origins (required by CloudFront API)
-            if "OriginPath" not in origin_copy:
-                origin_copy["OriginPath"] = ""
-            existing_origins.append(origin_copy)
-            
-            if origin["Id"] == f"s3-{project_name}":
-                s3_origin_exists = True
-                logger.info(f"  S3 origin already exists in distribution")
-        
-        # Add S3 origin if it doesn't exist
-        if not s3_origin_exists:
-            # Create new S3 origin with all required fields
-            # Note: CustomHeaders and OriginPath are required by CloudFront API even if empty
-            new_s3_origin = {
-                "Id": f"s3-{project_name}",
-                "DomainName": f"{s3_bucket_name}.s3.{region}.amazonaws.com",
-                "S3OriginConfig": {
-                    "OriginAccessIdentity": f"origin-access-identity/cloudfront/{oai_id}"
-                },
-                "CustomHeaders": {
-                    "Quantity": 0,
-                    "Items": []
-                },
-                "OriginPath": ""
-            }
-            existing_origins.append(new_s3_origin)
-            dist_config["Origins"]["Quantity"] = len(existing_origins)
-            dist_config["Origins"]["Items"] = existing_origins
-        
-        # Update cache behaviors to include S3 origin paths
-        existing_cache_behaviors = dist_config.get("CacheBehaviors", {}).get("Items", []).copy()
-        existing_path_patterns = {cb.get("PathPattern") for cb in existing_cache_behaviors if cb.get("PathPattern")}
-        
-        # Add /images/* cache behavior if it doesn't exist
-        if "/images/*" not in existing_path_patterns:
-            existing_cache_behaviors.append({
-                "PathPattern": "/images/*",
-                "TargetOriginId": f"s3-{project_name}",
-                "ViewerProtocolPolicy": "redirect-to-https",
-                "AllowedMethods": {
-                    "Quantity": 2,
-                    "Items": ["GET", "HEAD"],
-                    "CachedMethods": {
+            },
+            "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+            "OriginRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",
+            "Compress": True
+        },
+        "CacheBehaviors": {
+            "Quantity": 2,
+            "Items": [
+                {
+                    "PathPattern": "/images/*",
+                    "TargetOriginId": f"s3-{project_name}",
+                    "ViewerProtocolPolicy": "redirect-to-https",
+                    "AllowedMethods": {
                         "Quantity": 2,
-                        "Items": ["GET", "HEAD"]
-                    }
+                        "Items": ["GET", "HEAD"],
+                        "CachedMethods": {
+                            "Quantity": 2,
+                            "Items": ["GET", "HEAD"]
+                        }
+                    },
+                    "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+                    "Compress": True
                 },
-                "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
-                "Compress": True
-            })
-        
-        # Add /docs/* cache behavior if it doesn't exist
-        if "/docs/*" not in existing_path_patterns:
-            existing_cache_behaviors.append({
-                "PathPattern": "/docs/*",
-                "TargetOriginId": f"s3-{project_name}",
-                "ViewerProtocolPolicy": "redirect-to-https",
-                "AllowedMethods": {
-                    "Quantity": 2,
-                    "Items": ["GET", "HEAD"],
-                    "CachedMethods": {
+                {
+                    "PathPattern": "/docs/*",
+                    "TargetOriginId": f"s3-{project_name}",
+                    "ViewerProtocolPolicy": "redirect-to-https",
+                    "AllowedMethods": {
                         "Quantity": 2,
-                        "Items": ["GET", "HEAD"]
-                    }
+                        "Items": ["GET", "HEAD"],
+                        "CachedMethods": {
+                            "Quantity": 2,
+                            "Items": ["GET", "HEAD"]
+                        }
+                    },
+                    "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+                    "Compress": True
+                }
+            ]
+        },
+        "Origins": {
+            "Quantity": 2,
+            "Items": [
+                {
+                    "Id": f"alb-{project_name}",
+                    "DomainName": alb_info["dns"],
+                    "CustomOriginConfig": {
+                        "HTTPPort": 80,
+                        "HTTPSPort": 443,
+                        "OriginProtocolPolicy": "http-only"
+                    },
+                    "CustomHeaders": {
+                        "Quantity": 0,
+                        "Items": []
+                    },
+                    "OriginPath": ""
                 },
-                "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
-                "Compress": True
-            })
+                {
+                    "Id": f"s3-{project_name}",
+                    "DomainName": f"{s3_bucket_name}.s3.{region}.amazonaws.com",
+                    "S3OriginConfig": {
+                        "OriginAccessIdentity": f"origin-access-identity/cloudfront/{oai_id}"
+                    },
+                    "CustomHeaders": {
+                        "Quantity": 0,
+                        "Items": []
+                    },
+                    "OriginPath": ""
+                }
+            ]
+        },
+        "Enabled": True,
+        "PriceClass": "PriceClass_200"
+    }
+    
+    # Log distribution config to verify it matches the expected format
+    logger.info(f"Creating CloudFront distribution with config:")
+    logger.info(f"  Origins: {[origin['Id'] for origin in distribution_config['Origins']['Items']]}")
+    logger.info(f"  DefaultCacheBehavior TargetOriginId: {distribution_config['DefaultCacheBehavior']['TargetOriginId']}")
+    logger.info(f"  CacheBehaviors: {len(distribution_config['CacheBehaviors']['Items'])} behaviors")
+    
+    try:
+        response = cloudfront_client.create_distribution(DistributionConfig=distribution_config)
+        distribution_id = response["Distribution"]["Id"]
+        distribution_domain = response["Distribution"]["DomainName"]
         
-        # Always set CacheBehaviors (even if empty, CloudFront requires this field)
-        dist_config["CacheBehaviors"] = {
-            "Quantity": len(existing_cache_behaviors),
-            "Items": existing_cache_behaviors
-        }
-        
-        # Update distribution
-        cloudfront_client.update_distribution(
-            Id=distribution_id,
-            DistributionConfig=dist_config,
-            IfMatch=etag
-        )
-        logger.info(f"  ✓ Added S3 origin to CloudFront distribution")
-        logger.info(f"  Added cache behaviors for /images/* and /docs/*")
+        logger.info(f"✓ CloudFront distribution created (ALB + S3): {distribution_domain}")
+        logger.info(f"  Distribution ID: {distribution_id}")
+        logger.info(f"  Default origin: ALB {alb_info['dns']}")
+        logger.info(f"  /images/* and /docs/* origins: S3 bucket {s3_bucket_name}")
+        logger.warning("  Note: CloudFront distribution may take 15-20 minutes to deploy")
         
     except ClientError as e:
-        logger.error(f"Failed to update CloudFront distribution: {e}")
-        logger.warning("  CloudFront distribution was created but S3 origin was not added")
-        logger.warning("  You may need to manually add S3 origin through AWS Console")
-        # Continue anyway - distribution is created, just without S3 origin
+        logger.error(f"Error creating CloudFront distribution: {e}")
+        raise
     
     return {
         "id": distribution_id,
