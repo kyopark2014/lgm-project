@@ -2922,6 +2922,93 @@ def create_cloudfront_distribution(alb_info: Dict[str, str], s3_bucket_name: str
                 }
     except Exception as e:
         logger.debug(f"Error checking existing distributions: {e}")
+    
+    # Create CloudFront distribution with hybrid ALB + S3 origins
+    distribution_config = {
+        "CallerReference": f"{project_name}-{int(time.time())}",
+        "Comment": f"CloudFront-for-{project_name}-Hybrid",
+        "DefaultCacheBehavior": {
+            "TargetOriginId": f"alb-{project_name}",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "AllowedMethods": {
+                "Quantity": 7,
+                "Items": ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"],
+                "CachedMethods": {
+                    "Quantity": 2,
+                    "Items": ["GET", "HEAD"]
+                }
+            },
+            "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+            "OriginRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",
+            "Compress": True
+        },
+        "CacheBehaviors": {
+            "Quantity": 2,
+            "Items": [
+                {
+                    "PathPattern": "/images/*",
+                    "TargetOriginId": f"s3-{project_name}",
+                    "ViewerProtocolPolicy": "redirect-to-https",
+                    "AllowedMethods": {
+                        "Quantity": 2,
+                        "Items": ["GET", "HEAD"],
+                        "CachedMethods": {
+                            "Quantity": 2,
+                            "Items": ["GET", "HEAD"]
+                        }
+                    },
+                    "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+                    "Compress": True
+                },
+                {
+                    "PathPattern": "/docs/*",
+                    "TargetOriginId": f"s3-{project_name}",
+                    "ViewerProtocolPolicy": "redirect-to-https",
+                    "AllowedMethods": {
+                        "Quantity": 2,
+                        "Items": ["GET", "HEAD"],
+                        "CachedMethods": {
+                            "Quantity": 2,
+                            "Items": ["GET", "HEAD"]
+                        }
+                    },
+                    "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+                    "Compress": True
+                }
+            ]
+        },
+        "Origins": {
+            "Quantity": 1,
+            "Items": [
+                {
+                    "Id": f"alb-{project_name}",
+                    "DomainName": alb_info["dns"],
+                    "CustomOriginConfig": {
+                        "HTTPPort": 80,
+                        "HTTPSPort": 443,
+                        "OriginProtocolPolicy": "http-only"
+                    }
+                }                
+            ]
+        },
+        "Enabled": True,
+        "PriceClass": "PriceClass_200"
+    }
+
+    try:
+        response = cloudfront_client.create_distribution(DistributionConfig=distribution_config)
+        distribution_id = response["Distribution"]["Id"]
+        distribution_domain = response["Distribution"]["DomainName"]
+        
+        logger.info(f"✓ CloudFront distribution created (ALB + S3): {distribution_domain}")
+        logger.info(f"  Distribution ID: {distribution_id}")
+        logger.info(f"  Default origin: ALB {alb_info['dns']}")
+        logger.info(f"  /images/* origin: S3 bucket {s3_bucket_name}")
+        logger.warning("  Note: CloudFront distribution may take 15-20 minutes to deploy")
+        
+    except ClientError as e:
+        logger.error(f"Error creating CloudFront distribution: {e}")
+        raise
 
     # Check for existing Origin Access Identity or create new one
     logger.info("  Checking for existing Origin Access Identity for S3...")
@@ -2984,104 +3071,101 @@ def create_cloudfront_distribution(alb_info: Dict[str, str], s3_bucket_name: str
         logger.error(f"OAI ID: {oai_id}")
         logger.error(f"Bucket Policy: {json.dumps(bucket_policy, indent=2)}")
         raise
-    
-    # Create CloudFront distribution with hybrid ALB + S3 origins
-    distribution_config = {
-        "CallerReference": f"{project_name}-{int(time.time())}",
-        "Comment": f"CloudFront-for-{project_name}-Hybrid",
-        "DefaultCacheBehavior": {
-            "TargetOriginId": f"alb-{project_name}",
-            "ViewerProtocolPolicy": "redirect-to-https",
-            "AllowedMethods": {
-                "Quantity": 7,
-                "Items": ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"],
-                "CachedMethods": {
-                    "Quantity": 2,
-                    "Items": ["GET", "HEAD"]
-                }
-            },
-            "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
-            "OriginRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",
-            "Compress": True
-        },
-        "CacheBehaviors": {
-            "Quantity": 2,
-            "Items": [
-                {
-                    "PathPattern": "/images/*",
-                    "TargetOriginId": f"s3-{project_name}",
-                    "ViewerProtocolPolicy": "redirect-to-https",
-                    "AllowedMethods": {
-                        "Quantity": 2,
-                        "Items": ["GET", "HEAD"],
-                        "CachedMethods": {
-                            "Quantity": 2,
-                            "Items": ["GET", "HEAD"]
-                        }
-                    },
-                    "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
-                    "Compress": True
-                },
-                {
-                    "PathPattern": "/docs/*",
-                    "TargetOriginId": f"s3-{project_name}",
-                    "ViewerProtocolPolicy": "redirect-to-https",
-                    "AllowedMethods": {
-                        "Quantity": 2,
-                        "Items": ["GET", "HEAD"],
-                        "CachedMethods": {
-                            "Quantity": 2,
-                            "Items": ["GET", "HEAD"]
-                        }
-                    },
-                    "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
-                    "Compress": True
-                }
-            ]
-        },
-        "Origins": {
-            "Quantity": 2,
-            "Items": [
-                {
-                    "Id": f"alb-{project_name}",
-                    "DomainName": alb_info["dns"],
-                    "CustomOriginConfig": {
-                        "HTTPPort": 80,
-                        "HTTPSPort": 443,
-                        "OriginProtocolPolicy": "http-only"
-                    }
-                },
-                {
-                    "Id": f"s3-{project_name}",
-                    "DomainName": f"{s3_bucket_name}.s3.{region}.amazonaws.com",
-                    "S3OriginConfig": {
-                        "OriginAccessIdentity": f"origin-access-identity/cloudfront/{oai_id}"
-                    }
-                }
-            ]
-        },
-        "Enabled": True,
-        "PriceClass": "PriceClass_200"
-    }
 
+    # Update CloudFront distribution to add S3 origin
+    logger.info("  Updating CloudFront distribution to add S3 origin...")
     try:
-        response = cloudfront_client.create_distribution(DistributionConfig=distribution_config)
-        distribution_id = response["Distribution"]["Id"]
-        distribution_domain = response["Distribution"]["DomainName"]
+        # Get current distribution config
+        dist_response = cloudfront_client.get_distribution(Id=distribution_id)
+        dist_config = dist_response["Distribution"]["DistributionConfig"]
+        etag = dist_response["ETag"]
         
-        logger.info(f"✓ CloudFront distribution created (ALB + S3): {distribution_domain}")
-        logger.info(f"  Distribution ID: {distribution_id}")
-        logger.info(f"  Default origin: ALB {alb_info['dns']}")
-        logger.info(f"  /images/* origin: S3 bucket {s3_bucket_name}")
-        logger.warning("  Note: CloudFront distribution may take 15-20 minutes to deploy")
-        return {
-            "id": distribution_id,
-            "domain": distribution_domain
-        }
+        # Check if S3 origin already exists
+        s3_origin_exists = False
+        existing_origins = dist_config["Origins"]["Items"].copy()
+        for origin in existing_origins:
+            if origin["Id"] == f"s3-{project_name}":
+                s3_origin_exists = True
+                logger.info(f"  S3 origin already exists in distribution")
+                break
+        
+        # Add S3 origin if it doesn't exist
+        if not s3_origin_exists:
+            existing_origins.append({
+                "Id": f"s3-{project_name}",
+                "DomainName": f"{s3_bucket_name}.s3.{region}.amazonaws.com",
+                "S3OriginConfig": {
+                    "OriginAccessIdentity": f"origin-access-identity/cloudfront/{oai_id}"
+                }
+            })
+            dist_config["Origins"]["Quantity"] = len(existing_origins)
+            dist_config["Origins"]["Items"] = existing_origins
+        
+        # Update cache behaviors to include S3 origin paths
+        existing_cache_behaviors = dist_config.get("CacheBehaviors", {}).get("Items", []).copy()
+        existing_path_patterns = {cb.get("PathPattern") for cb in existing_cache_behaviors}
+        
+        # Add /images/* cache behavior if it doesn't exist
+        if "/images/*" not in existing_path_patterns:
+            existing_cache_behaviors.append({
+                "PathPattern": "/images/*",
+                "TargetOriginId": f"s3-{project_name}",
+                "ViewerProtocolPolicy": "redirect-to-https",
+                "AllowedMethods": {
+                    "Quantity": 2,
+                    "Items": ["GET", "HEAD"],
+                    "CachedMethods": {
+                        "Quantity": 2,
+                        "Items": ["GET", "HEAD"]
+                    }
+                },
+                "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+                "Compress": True
+            })
+        
+        # Add /docs/* cache behavior if it doesn't exist
+        if "/docs/*" not in existing_path_patterns:
+            existing_cache_behaviors.append({
+                "PathPattern": "/docs/*",
+                "TargetOriginId": f"s3-{project_name}",
+                "ViewerProtocolPolicy": "redirect-to-https",
+                "AllowedMethods": {
+                    "Quantity": 2,
+                    "Items": ["GET", "HEAD"],
+                    "CachedMethods": {
+                        "Quantity": 2,
+                        "Items": ["GET", "HEAD"]
+                    }
+                },
+                "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+                "Compress": True
+            })
+        
+        if existing_cache_behaviors:
+            dist_config["CacheBehaviors"] = {
+                "Quantity": len(existing_cache_behaviors),
+                "Items": existing_cache_behaviors
+            }
+        
+        # Update distribution
+        cloudfront_client.update_distribution(
+            Id=distribution_id,
+            DistributionConfig=dist_config,
+            IfMatch=etag
+        )
+        logger.info(f"  ✓ Added S3 origin to CloudFront distribution")
+        logger.info(f"  Added cache behaviors for /images/* and /docs/*")
+        
     except ClientError as e:
-        logger.error(f"Error creating CloudFront distribution: {e}")
-        raise
-
+        logger.error(f"Failed to update CloudFront distribution: {e}")
+        logger.warning("  CloudFront distribution was created but S3 origin was not added")
+        logger.warning("  You may need to manually add S3 origin through AWS Console")
+        # Continue anyway - distribution is created, just without S3 origin
+    
+    return {
+        "id": distribution_id,
+        "domain": distribution_domain
+    }
 
 def get_setup_script(environment: Dict[str, str], git_name: str) -> str:
     """Generate setup script for EC2 instance."""
