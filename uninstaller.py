@@ -714,6 +714,52 @@ def delete_secrets():
     
     logger.info("✓ Secrets deleted")
 
+def delete_secret_groups():
+    """Delete security groups (alb-sg-for-es-us와 같은 security group 삭제)."""
+    logger.info("[6.5/9] Deleting security groups")
+    
+    try:
+        # Get all security groups
+        all_sgs = ec2_client.describe_security_groups()
+        
+        # Find security groups matching project name pattern
+        sgs_to_delete = []
+        for sg in all_sgs.get("SecurityGroups", []):
+            sg_name = sg.get("GroupName", "")
+            # Check if security group name contains project name
+            if project_name in sg_name and sg_name != "default":
+                sgs_to_delete.append({
+                    "GroupId": sg["GroupId"],
+                    "GroupName": sg_name,
+                    "VpcId": sg.get("VpcId")
+                })
+        
+        if not sgs_to_delete:
+            logger.info("  No security groups found to delete")
+            return
+        
+        logger.info(f"  Found {len(sgs_to_delete)} security group(s) to delete")
+        
+        # Delete each security group
+        for sg_info in sgs_to_delete:
+            try:
+                # Security groups are automatically deleted when VPC is deleted,
+                # but we try to delete them explicitly here
+                ec2_client.delete_security_group(GroupId=sg_info["GroupId"])
+                logger.info(f"  ✓ Deleted security group: {sg_info['GroupName']} ({sg_info['GroupId']})")
+            except ClientError as e:
+                error_code = e.response.get("Error", {}).get("Code", "")
+                if error_code == "DependencyViolation":
+                    logger.debug(f"  Security group {sg_info['GroupName']} has dependencies, will be deleted with VPC")
+                elif error_code == "InvalidGroup.NotFound":
+                    logger.debug(f"  Security group {sg_info['GroupName']} already deleted")
+                else:
+                    logger.warning(f"  Could not delete security group {sg_info['GroupName']}: {e}")
+        
+        logger.info("✓ Security groups processed")
+    except Exception as e:
+        logger.error(f"Error deleting security groups: {e}")
+
 def delete_iam_roles():
     """Delete IAM roles and policies."""
     logger.info("[7/9] Deleting IAM roles")
@@ -854,6 +900,7 @@ def main():
         delete_secrets()
         delete_iam_roles()
         delete_s3_buckets()
+        delete_secret_groups()         
         delete_disabled_cloudfront_distributions()
         
         elapsed_time = time.time() - start_time
