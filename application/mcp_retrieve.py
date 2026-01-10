@@ -14,9 +14,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("retrieve")
 
+script_dir = os.path.dirname(os.path.abspath(__file__))
+config_path = os.path.join(script_dir, "config.json")
+
 def load_config():
     config = None
-    script_dir = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(script_dir, "config.json")
     
     with open(config_path, "r", encoding="utf-8") as f:
@@ -26,8 +28,21 @@ def load_config():
 config = load_config()
 
 bedrock_region = config.get('region', 'us-west-2')
-projectName = config.get('projectName', 'es')
-knowledge_base_id = config.get('knowledge_base_id', '')
+projectName = config.get('projectName')
+
+bedrock_agent_client = boto3.client("bedrock-agent", region_name=bedrock_region)
+knowledge_base_list = bedrock_agent_client.list_knowledge_bases()
+for knowledge_base in knowledge_base_list.get("knowledgeBaseSummaries", []):
+    if knowledge_base["name"] == projectName:
+        knowledge_base_id = knowledge_base["knowledgeBaseId"]
+        break
+
+if knowledge_base_id != config.get('knowledge_base_id'):
+    config['knowledge_base_id'] = knowledge_base_id
+    logger.info(f"knowledge_base_id is updated: {knowledge_base_id}")
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=4)
+
 number_of_results = 5
 
 doc_prefix = "docs/"
