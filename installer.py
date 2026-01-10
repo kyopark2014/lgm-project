@@ -2952,7 +2952,12 @@ def create_cloudfront_distribution(alb_info: Dict[str, str], s3_bucket_name: str
                         "HTTPPort": 80,
                         "HTTPSPort": 443,
                         "OriginProtocolPolicy": "http-only"
-                    }
+                    },
+                    "CustomHeaders": {
+                        "Quantity": 0,
+                        "Items": []
+                    },
+                    "OriginPath": ""
                 }                
             ]
         },
@@ -3062,6 +3067,9 @@ def create_cloudfront_distribution(alb_info: Dict[str, str], s3_bucket_name: str
                     "Quantity": 0,
                     "Items": []
                 }
+            # Ensure originPath exists for all origins (required by CloudFront API)
+            if "OriginPath" not in origin_copy:
+                origin_copy["OriginPath"] = ""
             existing_origins.append(origin_copy)
             
             if origin["Id"] == f"s3-{project_name}":
@@ -3071,7 +3079,7 @@ def create_cloudfront_distribution(alb_info: Dict[str, str], s3_bucket_name: str
         # Add S3 origin if it doesn't exist
         if not s3_origin_exists:
             # Create new S3 origin with all required fields
-            # Note: CustomHeaders is required by CloudFront API even if empty
+            # Note: CustomHeaders and OriginPath are required by CloudFront API even if empty
             new_s3_origin = {
                 "Id": f"s3-{project_name}",
                 "DomainName": f"{s3_bucket_name}.s3.{region}.amazonaws.com",
@@ -3081,7 +3089,8 @@ def create_cloudfront_distribution(alb_info: Dict[str, str], s3_bucket_name: str
                 "CustomHeaders": {
                     "Quantity": 0,
                     "Items": []
-                }
+                },
+                "OriginPath": ""
             }
             existing_origins.append(new_s3_origin)
             dist_config["Origins"]["Quantity"] = len(existing_origins)

@@ -716,7 +716,7 @@ def delete_secrets():
 
 def delete_secret_groups():
     """Delete security groups (alb-sg-for-es-us와 같은 security group 삭제)."""
-    logger.info("[6.5/9] Deleting security groups")
+    logger.info("[4/9] Deleting security groups")
     
     try:
         # Get all security groups
