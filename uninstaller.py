@@ -714,7 +714,7 @@ def delete_secrets():
     
     logger.info("✓ Secrets deleted")
 
-def delete_secret_groups():
+def delete_secret_groups_and_route_tables():
     """Delete security groups (alb-sg-for-es-us와 같은 security group 삭제)."""
     logger.info("[4/9] Deleting security groups")
     
@@ -887,6 +887,19 @@ def delete_secret_groups():
             logger.info("  They will be deleted when VPC is deleted")
         else:
             logger.info(f"  ✓ Successfully deleted {len(deleted_sgs)} security group(s)")
+        
+        # delete route tables
+        # Get unique VPC IDs from security groups
+        vpc_ids = {sg["VpcId"] for sg in sgs_to_delete if sg.get("VpcId")}
+        
+        for vpc_id in vpc_ids:
+            route_tables = ec2_client.describe_route_tables(
+                Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]
+            )
+            for rt in route_tables["RouteTables"]:
+                if not any(assoc.get("Main") for assoc in rt["Associations"]):
+                    ec2_client.delete_route_table(RouteTableId=rt["RouteTableId"])
+                    logger.info(f"  ✓ Deleted route table: {rt['RouteTableId']} (VPC: {vpc_id})")
         
         logger.info("✓ Security groups processed")
     except Exception as e:
@@ -1095,7 +1108,7 @@ def main():
         delete_cloudfront_distributions()
         delete_alb_resources()
         delete_ec2_instances()
-        delete_secret_groups()         
+        delete_secret_groups_and_route_tables()         
         delete_vpc_resources()
         delete_remaining_security_groups()  # Check for any remaining security groups after VPC deletion
         delete_opensearch_collection()
